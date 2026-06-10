@@ -10,7 +10,7 @@ RUN npm install --omit=dev
 COPY . .
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ENV NODE_OPTIONS=-max-old-space-size=4096
+ENV NODE_OPTIONS=--max-old-space-size=4096
 
 # Expose server port
 EXPOSE 3000
