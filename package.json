@@ -1,5 +1,5 @@
-{  "name": "checkmycar-backend",
-  "version": "1.0.0",
+{"name": "checkmycar-backend",
+  "version": "1.0.0",
   "description": "AI-powered used car listing analyser",
   "main": "server.js",
   "scripts": {
