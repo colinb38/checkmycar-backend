@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 // ─── Middleware ───────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
-    origin: ['https://yourdomain.com', 'http://localhost:5500', 'http://127.0.0.1:5500'],
+    origin: ['https://checkmycarpurchase.info', 'https://www.checkmycarpurchase.info', 'http://localhost:5500', 'http://127.0.0.1:5500'],
 }));
 app.use(express.json());
 
