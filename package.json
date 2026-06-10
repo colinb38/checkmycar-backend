@@ -1,0 +1,26 @@
+{
+  "name": "checkmycar-backend",
+  "version": "1.0.0",
+  "description": "AI-powered used car listing analyser using Google Gemini (free tier)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "install-browser": "npx playwright install chromium"
+  },
+  "keywords": ["car", "vehicle", "analysis", "gemini", "ai", "mot"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^2.0.0",
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "helmet": "^8.0.0",
+    "playwright": "^1.49.0",
+    "rate-limiter-flexible": "^5.0.0",
+    "uuid": "^10.0.0"
+  }
+}
