@@ -3,6 +3,9 @@
 // ============================================================
 // Sends scraped listing data + images + MOT history to Gemini
 // and returns a structured JSON report.
+//
+// Includes: retry with backoff on 503 / overload errors,
+//           automatic fallback from 2.5-flash → 2.0-flash.
 // ============================================================
 
 const { GoogleGenAI } = require('@google/genai');
@@ -11,6 +14,14 @@ const { SYSTEM_PROMPT } = require('./prompt');
 
 // ─── Initialise Gemini ───────────────────────────────────
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// ─── Model Config ────────────────────────────────────────
+const PRIMARY_MODEL  = 'gemini-2.5-flash';     // Best quality (free tier)
+const FALLBACK_MODEL = 'gemini-2.0-flash';     // Less congested fallback
+
+// ─── Retry Config ────────────────────────────────────────
+const MAX_RETRIES   = 3;
+const RETRY_DELAYS  = [5000, 15000, 30000];    // 5s, 15s, 30s
 
 // ─── Fetch Image & Convert to Base64 ────────────────────
 // Gemini requires images as inline base64 data (not URLs)
@@ -182,6 +193,45 @@ function buildTextPrompt(listingData, motData) {
     return text;
 }
 
+// ─── Retry Helper with Backoff ───────────────────────────
+// Retries on 503, 429, overload, and resource-exhausted errors.
+// Returns the successful response or throws after all retries.
+function isRetryableError(error) {
+    const msg    = (error.message || '').toLowerCase();
+    const status = error.status || error.httpStatusCode || 0;
+
+    return (
+        status === 503 ||
+        status === 429 ||
+        msg.includes('503') ||
+        msg.includes('429') ||
+        msg.includes('high demand') ||
+        msg.includes('overloaded') ||
+        msg.includes('resource_exhausted') ||
+        msg.includes('temporarily unavailable') ||
+        msg.includes('service unavailable')
+    );
+}
+
+async function callGeminiWithRetry(requestFn) {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            return await requestFn();
+        } catch (error) {
+            if (isRetryableError(error) && attempt < MAX_RETRIES) {
+                const delay = RETRY_DELAYS[attempt];
+                console.warn(
+                    `   ⚠ Gemini overloaded — retry ${attempt + 1}/${MAX_RETRIES} ` +
+                    `in ${delay / 1000}s...`
+                );
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            throw error;          // Not retryable or out of retries
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 //  MAIN ANALYSIS FUNCTION
 // ═══════════════════════════════════════════════════════════
@@ -189,8 +239,6 @@ async function analyseVehicle(listingData, motData = null) {
     console.log('   Preparing Gemini request...');
 
     // ── Step 1: Fetch and convert images to base64 ──
-    // Gemini requires inline base64 images (not URLs like OpenAI)
-    // Limit to 6 images to stay within free tier token budget
     const imageUrls = (listingData.images || []).slice(0, 6);
     const imageResults = await Promise.allSettled(
         imageUrls.map(url => fetchImageAsBase64(url))
@@ -207,9 +255,7 @@ async function analyseVehicle(listingData, motData = null) {
     contents.push({
         role: 'user',
         parts: [
-            // Text part: the listing data + MOT
             { text: buildTextPrompt(listingData, motData) },
-            // Image parts: base64-encoded listing photos
             ...images.map(img => ({
                 inlineData: {
                     mimeType: img.mimeType,
@@ -219,73 +265,117 @@ async function analyseVehicle(listingData, motData = null) {
         ],
     });
 
-    // ── Step 3: Call Gemini API ──
-    console.log('   Calling Gemini 2.5 Flash...');
-    const startTime = Date.now();
+    // ── Step 3: Try primary model, then fallback ──
+    const models = [PRIMARY_MODEL, FALLBACK_MODEL];
 
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',     // Free tier: 1,500 req/day
-            contents: contents,
-            config: {
-                systemInstruction: SYSTEM_PROMPT,
-                responseMimeType: 'application/json',  // Force JSON output
-                temperature: 0.3,           // Lower = more consistent/factual
-                maxOutputTokens: 16384,     // Extra room to avoid truncation
-            },
-        });
+    for (const model of models) {
+        console.log(`   Calling ${model}...`);
+        const startTime = Date.now();
 
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        try {
+            const response = await callGeminiWithRetry(() =>
+                ai.models.generateContent({
+                    model: model,
+                    contents: contents,
+                    config: {
+                        systemInstruction: SYSTEM_PROMPT,
+                        responseMimeType: 'application/json',
+                        temperature: 0.3,
+                        maxOutputTokens: 16384,
+                    },
+                })
+            );
 
-        // ── Step 4: Parse the response ──
-        const rawText = response.text;
-        const report = cleanAndParseJson(rawText);
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
-        // ── Step 5: Log usage ──
-        const usage = response.usageMetadata || {};
-        console.log(`   ✅ Gemini response in ${elapsed}s`);
-        console.log(`   📊 Tokens — Input: ${usage.promptTokenCount || '?'}, ` +
-                    `Output: ${usage.candidatesTokenCount || '?'}, ` +
-                    `Total: ${usage.totalTokenCount || '?'}`);
-        console.log(`   💰 Cost: £0.00 (free tier)`);
+            // ── Step 4: Parse the response ──
+            const rawText = response.text;
+            const report = cleanAndParseJson(rawText);
 
-        return report;
+            // ── Step 5: Log usage ──
+            const usage = response.usageMetadata || {};
+            console.log(`   ✅ ${model} response in ${elapsed}s`);
+            console.log(`   📊 Tokens — Input: ${usage.promptTokenCount || '?'}, ` +
+                        `Output: ${usage.candidatesTokenCount || '?'}, ` +
+                        `Total: ${usage.totalTokenCount || '?'}`);
+            console.log(`   💰 Cost: £0.00 (free tier)`);
 
-    } catch (error) {
-        // ── Retry with text-only if image processing fails ──
-        if (error.message?.includes('image') || error.status === 400) {
-            console.warn('   ⚠ Image analysis failed, retrying text-only...');
-            return await analyseTextOnly(listingData, motData);
+            return report;
+
+        } catch (error) {
+            // ── Image processing failure → retry text-only ──
+            if (error.message?.includes('image') || error.status === 400) {
+                console.warn('   ⚠ Image analysis failed, retrying text-only...');
+                return await analyseTextOnly(listingData, motData);
+            }
+
+            // ── Rate limit (daily quota) → can't retry ──
+            if (error.status === 429 && error.message?.includes('quota')) {
+                throw new Error(
+                    'Gemini free tier daily limit reached (1,500/day). Try again tomorrow.'
+                );
+            }
+
+            // ── 503 / overload → try fallback model ──
+            if (isRetryableError(error) && model === PRIMARY_MODEL) {
+                console.warn(
+                    `   ⚠ ${PRIMARY_MODEL} unavailable after ${MAX_RETRIES} retries — ` +
+                    `falling back to ${FALLBACK_MODEL}...`
+                );
+                continue;   // Try next model in the loop
+            }
+
+            throw error;
         }
-
-        // Rate limit hit
-        if (error.status === 429) {
-            throw new Error('Gemini free tier daily limit reached (1,500/day). Try again tomorrow.');
-        }
-
-        throw error;
     }
+
+    // Should never reach here, but just in case
+    throw new Error('All Gemini models failed. Please try again later.');
 }
 
 // ─── Fallback: Text-Only Analysis (no images) ───────────
 async function analyseTextOnly(listingData, motData) {
     console.log('   Retrying with text-only (no images)...');
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [{
-            role: 'user',
-            parts: [{ text: buildTextPrompt(listingData, motData) }],
-        }],
-        config: {
-            systemInstruction: SYSTEM_PROMPT,
-            responseMimeType: 'application/json',
-            temperature: 0.3,
-            maxOutputTokens: 16384,
-        },
-    });
+    const contents = [{
+        role: 'user',
+        parts: [{ text: buildTextPrompt(listingData, motData) }],
+    }];
 
-    return cleanAndParseJson(response.text);
+    const models = [PRIMARY_MODEL, FALLBACK_MODEL];
+
+    for (const model of models) {
+        console.log(`   Calling ${model} (text-only)...`);
+
+        try {
+            const response = await callGeminiWithRetry(() =>
+                ai.models.generateContent({
+                    model: model,
+                    contents: contents,
+                    config: {
+                        systemInstruction: SYSTEM_PROMPT,
+                        responseMimeType: 'application/json',
+                        temperature: 0.3,
+                        maxOutputTokens: 16384,
+                    },
+                })
+            );
+
+            return cleanAndParseJson(response.text);
+
+        } catch (error) {
+            if (isRetryableError(error) && model === PRIMARY_MODEL) {
+                console.warn(
+                    `   ⚠ ${PRIMARY_MODEL} unavailable (text-only) — ` +
+                    `falling back to ${FALLBACK_MODEL}...`
+                );
+                continue;
+            }
+            throw error;
+        }
+    }
+
+    throw new Error('All Gemini models failed (text-only). Please try again later.');
 }
 
 module.exports = { analyseVehicle };
