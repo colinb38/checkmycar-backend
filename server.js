@@ -129,6 +129,6 @@ function isValidRegPlate(plate) {
 // ─── Start Server ────────────────────────────────────────
 app.listen(PORT, () => {
     console.log(`\n🚗 CheckMyCar backend running on http://localhost:${PORT}`);
-    console.log(`   AI Engine: Google Gemini 2.5 Flash (FREE)`);
-    console.log(`   Daily limit: 1,500 analyses\n`);
+    console.log(`   AI Engine: Google Gemini 2.5 Flash-Lite (Tier 1)`);
+    console.log(`   Fallback to Gemini 2.5 Flash\n`);
 });
