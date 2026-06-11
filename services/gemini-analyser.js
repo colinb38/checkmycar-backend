@@ -1,3 +1,10 @@
+// ============================================================
+// gemini-analyser.js — Gemini 2.5 Flash Vehicle Analysis
+// ============================================================
+// Sends scraped listing data + images + MOT history to Gemini
+// and returns a structured JSON report.
+// ============================================================
+
 const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 const { SYSTEM_PROMPT } = require('./prompt');
@@ -30,6 +37,88 @@ async function fetchImageAsBase64(imageUrl, timeoutMs = 10000) {
     } catch (error) {
         console.warn(`   ⚠ Failed to fetch image: ${imageUrl.substring(0, 80)}...`);
         return null;
+    }
+}
+
+// ─── Clean & Parse Gemini JSON Response ──────────────────
+// Gemini sometimes wraps JSON in markdown code fences or
+// includes trailing text — this handles all edge cases.
+function cleanAndParseJson(rawText) {
+    if (!rawText || typeof rawText !== 'string') {
+        throw new Error('Gemini returned empty or non-string response.');
+    }
+
+    console.log(`   [Parser] Raw response length: ${rawText.length} chars`);
+    console.log(`   [Parser] First 100 chars: ${rawText.substring(0, 100)}`);
+
+    let cleaned = rawText.trim();
+
+    // Step 1: Strip markdown code fences  ```json ... ```  or  ``` ... ```
+    if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '');
+        cleaned = cleaned.replace(/\n?\s*```\s*$/, '');
+        cleaned = cleaned.trim();
+    }
+
+    // Step 2: If there's still non-JSON text around the object,
+    //         extract from first { to last }
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace  = cleaned.lastIndexOf('}');
+
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+        throw new Error(
+            'Gemini response contains no valid JSON object. ' +
+            'Raw start: ' + rawText.substring(0, 300)
+        );
+    }
+
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+
+    // Step 3: Try to parse
+    try {
+        return JSON.parse(cleaned);
+    } catch (firstError) {
+        console.warn(`   [Parser] First parse failed: ${firstError.message}`);
+        console.warn(`   [Parser] Attempting truncation repair...`);
+
+        // Step 4: Attempt to repair truncated JSON by closing open braces/brackets
+        let repaired = cleaned;
+        let openBraces   = 0;
+        let openBrackets = 0;
+        let inString     = false;
+        let escaped      = false;
+
+        for (let i = 0; i < repaired.length; i++) {
+            const ch = repaired[i];
+            if (escaped)       { escaped = false; continue; }
+            if (ch === '\\')   { escaped = true;  continue; }
+            if (ch === '"')    { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{') openBraces++;
+            if (ch === '}') openBraces--;
+            if (ch === '[') openBrackets++;
+            if (ch === ']') openBrackets--;
+        }
+
+        // Remove any trailing comma before we close
+        repaired = repaired.replace(/,\s*$/, '');
+
+        // Close any unclosed brackets/braces
+        while (openBrackets > 0) { repaired += ']'; openBrackets--; }
+        while (openBraces > 0)   { repaired += '}'; openBraces--; }
+
+        try {
+            const result = JSON.parse(repaired);
+            console.log('   [Parser] ✅ Repaired truncated JSON successfully.');
+            return result;
+        } catch (secondError) {
+            console.error('   [Parser] ❌ Repair also failed:', secondError.message);
+            console.error('   [Parser] Cleaned text (first 500 chars):', cleaned.substring(0, 500));
+            throw new Error(
+                'Gemini returned invalid JSON that could not be repaired. ' +
+                'Raw start: ' + rawText.substring(0, 300)
+            );
+        }
     }
 }
 
@@ -115,13 +204,11 @@ async function analyseVehicle(listingData, motData = null) {
 
     // ── Step 2: Build the content parts array ──
     const contents = [];
-
     contents.push({
         role: 'user',
         parts: [
             // Text part: the listing data + MOT
             { text: buildTextPrompt(listingData, motData) },
-
             // Image parts: base64-encoded listing photos
             ...images.map(img => ({
                 inlineData: {
@@ -144,7 +231,7 @@ async function analyseVehicle(listingData, motData = null) {
                 systemInstruction: SYSTEM_PROMPT,
                 responseMimeType: 'application/json',  // Force JSON output
                 temperature: 0.3,           // Lower = more consistent/factual
-                maxOutputTokens: 8192,      // Plenty for the full report
+                maxOutputTokens: 16384,     // Extra room to avoid truncation
             },
         });
 
@@ -152,18 +239,7 @@ async function analyseVehicle(listingData, motData = null) {
 
         // ── Step 4: Parse the response ──
         const rawText = response.text;
-        let report;
-        try {
-            report = JSON.parse(rawText);
-        } catch (parseError) {
-            // Try to extract JSON from markdown code blocks
-            const jsonMatch = rawText.match(/```json?\s*([\s\S]*?)\s*```/);
-            if (jsonMatch) {
-                report = JSON.parse(jsonMatch[1]);
-            } else {
-                throw new Error('Gemini returned invalid JSON: ' + rawText.substring(0, 200));
-            }
-        }
+        const report = cleanAndParseJson(rawText);
 
         // ── Step 5: Log usage ──
         const usage = response.usageMetadata || {};
@@ -193,6 +269,8 @@ async function analyseVehicle(listingData, motData = null) {
 
 // ─── Fallback: Text-Only Analysis (no images) ───────────
 async function analyseTextOnly(listingData, motData) {
+    console.log('   Retrying with text-only (no images)...');
+
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: [{
@@ -203,11 +281,11 @@ async function analyseTextOnly(listingData, motData) {
             systemInstruction: SYSTEM_PROMPT,
             responseMimeType: 'application/json',
             temperature: 0.3,
-            maxOutputTokens: 8192,
+            maxOutputTokens: 16384,
         },
     });
 
-    return JSON.parse(response.text);
+    return cleanAndParseJson(response.text);
 }
 
 module.exports = { analyseVehicle };
