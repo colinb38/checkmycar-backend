@@ -1,4 +1,5 @@
 require('dotenv').config();
+const motRoutes = require('../routes/mot-routes');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -16,6 +17,7 @@ app.use(cors({
     origin: ['https://checkmycarpurchase.info', 'https://www.checkmycarpurchase.info', 'http://localhost:5500', 'http://127.0.0.1:5500'],
 }));
 app.use(express.json());
+app.use(motRoutes);
 
 // ─── Rate Limiter: 10 reports per hour per IP ────────────
 const rateLimiter = new RateLimiterMemory({
