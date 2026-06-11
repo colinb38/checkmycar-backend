@@ -1,5 +1,5 @@
 require('dotenv').config();
-const motRoutes = require('../routes/mot-routes');
+const motRoutes = require('./mot-routes');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
