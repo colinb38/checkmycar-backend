@@ -16,8 +16,8 @@ const { SYSTEM_PROMPT } = require('./prompt');
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─── Model Config ────────────────────────────────────────
-const PRIMARY_MODEL  = 'gemini-2.5-flash';     // Best quality (free tier)
-const FALLBACK_MODEL = 'gemini-2.5-flash-lite';     // Less congested fallback
+const PRIMARY_MODEL  = 'gemini-2.5-flash-lite';     // quicker not much difference experience wise
+const FALLBACK_MODEL = 'gemini-2.5-flash';     // just in case
 
 // ─── Retry Config ────────────────────────────────────────
 const MAX_RETRIES   = 3;
