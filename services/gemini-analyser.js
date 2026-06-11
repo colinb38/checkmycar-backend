@@ -5,7 +5,7 @@
 // and returns a structured JSON report.
 //
 // Includes: retry with backoff on 503 / overload errors,
-//           automatic fallback from 2.5-flash → 2.0-flash.
+//           automatic fallback from 2.5-flash → gemini-2.5-flash-lite.
 // ============================================================
 
 const { GoogleGenAI } = require('@google/genai');
@@ -17,7 +17,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─── Model Config ────────────────────────────────────────
 const PRIMARY_MODEL  = 'gemini-2.5-flash';     // Best quality (free tier)
-const FALLBACK_MODEL = 'gemini-2.0-flash';     // Less congested fallback
+const FALLBACK_MODEL = 'gemini-2.5-flash-lite';     // Less congested fallback
 
 // ─── Retry Config ────────────────────────────────────────
 const MAX_RETRIES   = 3;
