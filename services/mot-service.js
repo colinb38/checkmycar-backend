@@ -13,8 +13,8 @@ async function getAccessToken() {
         const response = await axios.put(
             'https://history.mot.api.gov.uk/v1/trade/credentials',
             {
-                clientId: process.env.MOT_API_CLIENT_ID,
-                clientSecret: process.env.MOT_API_CLIENT_SECRET,
+                clientId: process.env.MOT_CLIENT_ID,
+                clientSecret: process.env.MOT_CLIENT_SECRET,
             },
             {
                 headers: { 'Content-Type': 'application/json' },
