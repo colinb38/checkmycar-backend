@@ -13,7 +13,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { getMotHistory, testMotConnection } = require('./mot-service');
+const { getMotHistory, testMotConnection } = require('../services/mot-service');
 
 // ── GET /api/mot/health ────────────────────────────────────
 router.get('/api/mot/health', async (req, res) => {
